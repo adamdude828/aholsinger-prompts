@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__playwright",
+      "mcp__sql-server",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(cut:*)",
+      "Bash(tr:*)",
+      "Bash(wc:*)",
+      "Bash(jq:*)",
+      "Bash(diff:*)",
+      "Bash(sha256sum:*)",
+    ],
+    "deny": []
+  }
+}
