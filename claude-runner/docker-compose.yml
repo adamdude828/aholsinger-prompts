@@ -1,0 +1,187 @@
+services:
+  laravel_app:
+    build:
+      context: ./do-git-mkt-reviews-laravel-php/docker/stages/4-xdebug
+      dockerfile: Dockerfile
+    image: laravel-app-php8319-sqlsrv-xdebug:latest
+    platform: linux/amd64
+    container_name: laravel_app_dev
+    restart: unless-stopped
+    working_dir: /var/www/html
+    environment:
+      - DB_CONNECTION=sqlsrv
+      - DB_HOST=db
+      - DB_PORT=1433
+      - DB_DATABASE=laravel
+      - DB_USERNAME=sa
+      - DB_PASSWORD=abcDEF123#
+      - DB_TRUST_SERVER_CERTIFICATE=true
+      - WAIT_FOR_DB=true
+      - RUN_MIGRATIONS=true
+      - MAIL_HOST=mailhog
+      - MAIL_PORT=1025
+      - MAIL_FROM_ADDRESS=test@example.com
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=null
+      - APP_URL=${APP_URL:-http://laravel_app:8000}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_REDIRECT_URL=${AZURE_REDIRECT_URL:-http://nextjs_app:3000}
+      - AZURE_AUTHORIZED_GROUP_ID=${AZURE_AUTHORIZED_GROUP_ID}
+      - AZURE_TARGET_GROUP_ID=${AZURE_TARGET_GROUP_ID:-7ecebecb-a3eb-463d-82fb-c4ca4c44a3cf}
+    ports:
+      - "8000:80"
+      - "9003:9003" # Xdebug port
+    volumes:
+      - ./do-git-mkt-reviews-laravel-php:/var/www/html
+      - ./do-git-mkt-reviews-laravel-php/storage/email-data:/var/www/data
+    networks:
+      - review-net
+    depends_on:
+      - db
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  db:
+    build:
+      context: ./do-git-mkt-reviews-laravel-php/docker/database
+      dockerfile: Dockerfile
+    container_name: sqlserver_dev
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=abcDEF123#
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - ./do-git-mkt-reviews-laravel-php/docker/database/data/data:/var/opt/mssql/data
+      - ./do-git-mkt-reviews-laravel-php/docker/database/data/log:/var/opt/mssql/log
+      - ./do-git-mkt-reviews-laravel-php/docker/database/data/secrets:/var/opt/mssql/secrets
+    networks:
+      - review-net
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "abcDEF123#" -C -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:alpine
+    container_name: redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./do-git-mkt-reviews-laravel-php/docker/redis/data:/data
+    networks:
+      - review-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: mailhog
+    platform: linux/amd64
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - review-net
+
+  nextjs_app:
+    image: node:20-alpine
+    container_name: nextjs_app_dev
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://laravel_app:80}
+      - NEXT_PUBLIC_AZURE_CLIENT_ID=${NEXT_PUBLIC_AZURE_CLIENT_ID}
+      - NEXT_PUBLIC_AZURE_TENANT_ID=${NEXT_PUBLIC_AZURE_TENANT_ID}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://nextjs_app:3000}
+      - AZURE_KEY_VAULT_NAME=${AZURE_KEY_VAULT_NAME}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./do-git-mkt-reviews-next-js:/app
+      - /app/node_modules  # Prevent host node_modules from overriding container's
+      - /app/.next         # Prevent host .next from overriding container's
+    networks:
+      - review-net
+    depends_on:
+      - laravel_app
+    command: sh -c "npm install && npm run dev"
+
+  mcp_docker:
+    image: adamdude828/mcp-server-docker 
+    container_name: mcp_docker
+    restart: unless-stopped
+    volumes:
+      # Mount Docker socket to allow container management
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - review-net
+    ports:
+      - "3001:3000"  # Expose MCP server on host port 3001
+    environment:
+      - DEFAULT_SERVICE=laravel_app
+      - PORT=3000
+      - ALLOWED_CONTAINERS=laravel_app:laravel_app_dev,db:sqlserver_dev,redis:redis_dev,mailhog:mailhog,nextjs_app:nextjs_app_dev
+      - COMMAND_TIMEOUT=300000
+
+  claude_code:
+    build:
+      context: .
+      dockerfile: claude-runner.Dockerfile
+    container_name: claude_code
+    platform: linux/amd64
+    restart: unless-stopped
+    volumes:
+      # Mount node home directory for persistent Claude Code data
+      - ./claude-home:/home/node
+      # Mount only the specific directories needed
+      - ./do-git-mkt-reviews-laravel-php:/workspace/laravel
+      - ./do-git-mkt-reviews-next-js:/workspace/nextjs
+      - ./fe-nginx-termination:/workspace/fe-nginx-termination
+      - ./claude-runner.Dockerfile:/workspace/claude-runner.Dockfile
+      - ./claude_code:/workspace/claude_code
+      # Mount docker configuration files
+      - ./docker-compose.yml:/workspace/docker-compose.yml
+    networks:
+      - review-net
+    ports:
+      - "3002:3000"  # Expose the nginx proxy on host port 3002
+    environment:
+      # Pass through API key if set
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Pass through GitHub token if set
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      # Database connection for MCP SQL Server
+      - DB_HOST=db
+      - DB_PORT=1433
+      - DB_DATABASE=laravel
+      - DB_USER=sa
+      - DB_PASSWORD=abcDEF123#
+      - DB_TRUST_SERVER_CERTIFICATE=true
+    working_dir: /workspace
+    depends_on:
+      - db
+      - nextjs_app
+    # Run the startup script
+    command: ["/workspace/claude_code/start.sh"]
+
+networks:
+  review-net:
+    driver: bridge 
